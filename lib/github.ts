@@ -80,7 +80,7 @@ function utcStamp(): string {
 let _dataBranchEnsured = false;
 async function ensureDataBranch(): Promise<void> {
   if (_dataBranchEnsured) return;
-  const { token, repo, branch } = cfg();
+  const { token, repo, branch, notesDir } = cfg();
   // Does the data branch already exist?
   const refUrl = `${API}/repos/${repo}/git/ref/${encodeURIComponent(
     `heads/${branch}`
@@ -98,21 +98,33 @@ async function ensureDataBranch(): Promise<void> {
       `Failed to check data branch: ${refRes.status} ${await refRes.text()}`
     );
   }
-  // Data branch missing: build an empty orphan branch so it only ever holds
-  // note files. 1) create an empty tree, 2) create a parentless root commit
-  // pointing at it, 3) create the ref.
+  // Data branch missing: build an orphan branch that only ever holds note
+  // files. GitHub's Trees API rejects a truly empty tree ({tree: []} -> 422
+  // "Invalid tree info"), so we seed the tree with a single placeholder file
+  // (`<notesDir>/.gitkeep`). This creates the notes directory and keeps the
+  // branch free of any application code. Steps: 1) create the tree with the
+  // placeholder, 2) create a parentless root commit, 3) create the ref.
   const jsonHeaders = { ...headers(token), "Content-Type": "application/json" };
   const treeRes = await fetch(`${API}/repos/${repo}/git/trees`, {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ tree: [] }),
+    body: JSON.stringify({
+      tree: [
+        {
+          path: `${notesDir}/.gitkeep`,
+          mode: "100644",
+          type: "blob",
+          content: "",
+        },
+      ],
+    }),
   });
   if (!treeRes.ok)
     throw new Error(
-      `Failed to create empty tree for data branch "${branch}": ${treeRes.status} ${await treeRes.text()}`
+      `Failed to create seed tree for data branch "${branch}": ${treeRes.status} ${await treeRes.text()}`
     );
   const treeSha = (await treeRes.json())?.sha;
-  if (!treeSha) throw new Error("Could not read empty tree sha");
+  if (!treeSha) throw new Error("Could not read seed tree sha");
 
   const commitRes = await fetch(`${API}/repos/${repo}/git/commits`, {
     method: "POST",
